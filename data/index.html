@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Sensor Data</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background-color: #f4f4f9;
+        }
+        h1 {
+            margin-top: 20px;
+            color: #333;
+        }
+        #currentValue {
+            font-size: 20px;
+            font-weight: bold;
+            margin: 10px;
+        }
+        #myChart {
+            max-width: 80%;
+            max-height: 400px;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>ESP32 GAS Sensor Data</h1>
+    <h2 id="currentAdcValue">Current ADC Value: Loading...</h2>
+    <h2 id="currentRoValue">Current Ro Value: Loading...</h2>
+    <h2 id="currentLPGValue">Current LPG Value: Loading...</h2>
+    <h2 id="currentCOValue">Current CO Value: Loading...</h2>
+    <h2 id="currentSmokeValue">Current Smoke Value: Loading...</h2>
+    <canvas id="myChart" width="400" height="200"></canvas>
+
+    <script>
+        // Fetch initial data from the server and create chart
+        const ctx = document.getElementById('myChart').getContext('2d');
+        let currentData = {
+            labels: [],
+            datasets: [{
+                label: 'LPG',
+                data: [],
+                borderColor: 'rgba(75, 192, 192, 1)',
+                borderWidth: 1,
+                fill: false
+            },
+            {
+                label: 'CO',
+                data: [],
+                borderColor: 'rgba192, 192, 75, 1)',
+                borderWidth: 1,
+                fill: false
+            },
+            {
+                label: 'Smoke',
+                data: [],
+                borderColor: 'rgba(192, 75, 192, 1)',
+                borderWidth: 1,
+                fill: false
+            }]
+        };
+
+        const config = {
+            type: 'line',
+            data: currentData,
+            options: {
+                scales: {
+                    x: {
+                        title: {
+                            text: 'Seconds Ago',
+                            display: true
+                        }
+                    },
+                    y: {
+                        title: {
+                            text: 'Sensor Value',
+                            display: true
+                        },
+                        min: 0, // Min value for y-axis
+                        // max: 5000 // Max value for y-axis
+                    }
+                },
+                animation: {
+                    duration: 0 // No animation for quick updates
+                }
+            }
+        };
+
+        const myChart = new Chart(ctx, config);
+
+        // Fetch the sensor data from the server and update the chart
+        function updateChart() {
+            fetch('/data')
+                .then(response => response.json())
+                .then(newData => {
+                    // Update chart data
+                    myChart.data.labels = newData.labels;
+                    myChart.data.datasets[0].data = newData.dataLPG;
+                    myChart.data.datasets[1].data = newData.dataCO;
+                    myChart.data.datasets[2].data = newData.dataSmoke;
+                    myChart.update();
+
+                    // Update the current value displayed
+                    document.getElementById('currentAdcValue').innerText = 'Current ADC Value: ' + newData.currentAdcValue;
+                    document.getElementById('currentRoValue').innerText = 'Current Ro Value: ' + newData.Ro;
+                    document.getElementById('currentLPGValue').innerText = 'Current LPG Value: ' + newData.dataLPG[59];
+                    document.getElementById('currentCOValue').innerText = 'Current CO Value: ' + newData.dataCO[59];
+                    document.getElementById('currentSmokeValue').innerText = 'Current Smoke Value: ' + newData.dataSmoke[59];
+                })
+                .catch(error => console.error('Error fetching data:', error));
+        }
+
+        // Update chart data every second
+        setInterval(updateChart, 1000);
+        // Initial data fetch
+        updateChart();
+    </script>
+
+</body>
+</html>

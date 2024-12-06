@@ -1,0 +1,180 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <ESPAsyncWebServer.h>
+#include <WiFiClient.h>
+#include <ArduinoJson.h>
+#include <time.h>
+#include "SPIFFS.h"
+#include <ESPmDNS.h>
+
+#define A0_PIN 36  // ESP32's pin GPIO36 connected to A0 pin of the MQ2 sensor
+#define D0_PIN 39  // ESP32's pin GPIO39 connected to D0 pin of the MQ2 sensor
+#define CALIB_PIN 26 // Calibration pin. on low skip
+
+#define V_REF 3.3         // Reference voltage
+#define ADC_RESOLUTION 4095 // 12-bit ADC resolution
+#define R_L 10000
+#define M -0.473 //-0.45          // Slope for the specific gas (e.g., LPG, Methane)
+#define B 1.413 // 0.2            // Intercept for the specific gas (e.g., LPG, Methane)
+
+// WiFi credentials
+const char *mdns = "esp32gas";
+const char *ssid = "uk-net";
+const char *password = "graphidus2018marcon77deblux";
+
+// Create an instance of the server
+AsyncWebServer server(80);
+
+// Global variables
+unsigned long lastUpdateTime = 0;
+int currentAdcValue = 0;
+double currentValue = 0.0;
+double dataPoints[60]; // Store the values for the last 1 hour (1 point per second)
+double r0 = R_L;
+
+double getSensorData(int samplesCount = 32) {
+  int rawADC = 0;
+  for(int i=0;i<samplesCount;i++)
+  {
+    rawADC += analogRead(A0_PIN);
+  }
+  rawADC /= samplesCount;
+  return rawADC;
+}
+
+// Function to calculate R0
+double calibrateR0(int adcValue) {
+    // Step 1: Convert ADC value to voltage
+    double V_out = (adcValue / (double)ADC_RESOLUTION) * V_REF;
+
+    // Step 2: Calculate sensor resistance Rs
+    double Rs = R_L * ((V_REF - V_out) / V_out);
+
+    return Rs; // Return Rs as R0 in clean air
+}
+
+void setup() {
+  // initialize serial communication
+  Serial.begin(115200);
+
+  pinMode(A0_PIN, INPUT);
+  pinMode(CALIB_PIN, INPUT_PULLUP);
+
+  // set the ADC attenuation to 11 dB (up to ~3.3V input)
+  analogSetAttenuation(ADC_11db);
+  Serial.println("Warming up the MQ2 sensor");
+
+   // Connect to Wi-Fi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+  Serial.println("Connected to WiFi. IP:");
+  Serial.println(WiFi.localIP().toString());
+
+  // Initialize mDNS
+  if (!MDNS.begin(mdns)) {   // Set the hostname to "esp32.local"
+    Serial.println("Error setting up MDNS responder!");
+    while(1) {
+      delay(1000);
+    }
+  }
+  Serial.println("mDNS responder started");
+  Serial.print("mDNS name = ");
+  Serial.println(mdns);
+
+
+  // Initialize data storage with random values (simulating sensor data)
+  for (int i = 0; i < 60; i++) {
+    dataPoints[i] = getSensorData();
+  }
+
+  if (!SPIFFS.begin(true)) {
+    Serial.println("An error has occurred while mounting SPIFFS");
+  }
+  Serial.println("SPIFFS mounted successfully");
+
+  // Set up time (for 1-hour data visualization)
+  configTime(0, 0, "pool.ntp.org");  // Use NTP for time synchronization
+
+
+  // Serve the index.html file
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    // Open the HTML file from LittleFS and send it as response
+    if (SPIFFS.exists("/index.html")) {
+      request->send(SPIFFS, "/index.html", "text/html");
+    } else {
+      request->send(404, "text/plain", "File not found");
+    }
+  });
+
+  // Serve JSON for current value and the last hour of data
+  server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request){
+    StaticJsonDocument<1024> doc;
+    doc["currentValue"] = currentValue;
+    doc["currentAdcValue"] = currentAdcValue;
+    doc["r0"] = r0;
+
+    JsonArray dataArray = doc.createNestedArray("data");
+    for (int i = 0; i < 60; i++) {
+      dataArray.add(dataPoints[i]);
+    }
+
+    JsonArray labelsArray = doc.createNestedArray("labels");
+    for (int i = 0; i < 60; i++) {
+      labelsArray.add(String(i));
+    }
+
+    String jsonResponse;
+    serializeJson(doc, jsonResponse);
+    request->send(200, "application/json", jsonResponse);
+  });
+
+  // Start the server
+  server.begin();
+}
+
+void loop() {
+  unsigned long currentTime = millis();
+  if (currentTime - lastUpdateTime > 1000) {
+    lastUpdateTime = currentTime;
+
+    if (digitalRead(CALIB_PIN))
+    {
+      r0 = calibrateR0(getSensorData());
+    } 
+    
+    // Shift the data points (remove the oldest and add the new one)
+    for (int i = 0; i < 59; i++) {
+      dataPoints[i] = dataPoints[i + 1];
+    }
+    
+    // Add new data point (simulate a new sensor reading)
+    currentAdcValue = getSensorData();
+    
+    double currentAdcValueInVolts = currentAdcValue * V_REF / ADC_RESOLUTION;
+    double rs = R_L * (V_REF - currentAdcValueInVolts) / currentAdcValueInVolts;
+    double rs_ro_ratio = rs / r0;
+    double ppm_log = M * log10(rs_ro_ratio) + B;
+    double ppm = pow(10, ppm_log);
+
+    currentValue = dataPoints[59] = ppm;
+
+    Serial.println();
+    Serial.print("r0 = ");
+    Serial.println(r0);
+    Serial.print("currentAdcValue = ");
+    Serial.println(currentAdcValue);
+    Serial.print("currentAdcValueInVolts = ");
+    Serial.println(currentAdcValueInVolts);
+    Serial.print("rs = ");
+    Serial.println(rs);
+    Serial.print("rs_ro_ratio = ");
+    Serial.println(rs_ro_ratio);
+    Serial.print("ppm_log = ");
+    Serial.println(ppm_log);
+    Serial.print("current ppm = ");
+    Serial.println(ppm);
+  }
+}
